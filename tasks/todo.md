@@ -19,12 +19,12 @@ Stabilize Phase 1-3, migrate OpenJarvis from Mac to a dedicated production dropl
 
 Fix the three known bugs before any new work. These cause friction every day; fixing them is also the cleanest test that the codebase is healthy enough to refactor.
 
-- [ ] **Bug A: `jarvis digest --fresh` exits before audio plays/caches**
-  - [ ] Reproduce, capture logs
-  - [ ] Identify race condition in CLI exit vs audio cache write
-  - [ ] Patch `cli/digest.py` (or wherever digest CLI lives) to await audio cache before returning
-  - [ ] Verify: `jarvis digest --fresh` plays through and audio file exists in cache after exit
-  - [ ] Update `tasks/lessons.md` with root cause
+- [x] **Bug A: `jarvis digest --fresh` exits before audio plays/caches**
+  - [x] Reproduce, capture logs
+  - [x] Identify race condition in CLI exit vs audio cache write
+  - [x] Patch `cli/digest.py` (or wherever digest CLI lives) to await audio cache before returning
+  - [x] Verify: `jarvis digest --fresh` plays through and audio file exists in cache after exit
+  - [x] Update `tasks/lessons.md` with root cause
 
 - [ ] **Bug B: `connect --list` reports "connected" with token-less connector files**
   - [ ] Reproduce by removing tokens from a connector JSON

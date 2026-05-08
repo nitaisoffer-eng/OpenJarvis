@@ -178,18 +178,17 @@ def digest(
         return
 
     if fresh:
-        # Trigger on-demand generation
+        # Trigger on-demand generation, then fall through to load + play.
         console.print("[yellow]Generating fresh digest...[/yellow]")
         try:
             from openjarvis.sdk import Jarvis
 
             with Jarvis() as j:
-                result = j.ask("Generate my morning digest", agent="morning_digest")
-                console.print(Markdown(result))
+                j.ask("Generate my morning digest", agent="morning_digest")
         except Exception as exc:
             console.print(f"[red]Failed to generate digest: {exc}[/red]")
-        store.close()
-        return
+            store.close()
+            return
 
     # Try to load today's cached digest
     artifact = store.get_today()
@@ -219,6 +218,7 @@ def digest(
 
     # Play audio in background while text renders
     audio_path = str(artifact.audio_path)
+    audio_thread = None
     if not text_only and audio_path and artifact.audio_path.exists():
         audio_thread = threading.Thread(
             target=_play_audio, args=(audio_path,), daemon=True
@@ -226,6 +226,8 @@ def digest(
         audio_thread.start()
 
     console.print(Markdown(text))
+    if audio_thread is not None:
+        audio_thread.join()
     store.close()
 
 
