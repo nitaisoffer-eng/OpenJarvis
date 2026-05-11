@@ -243,3 +243,20 @@ Before declaring Phase 7 done:
 - [ ] No public exposure — port scan from outside the Tailnet shows only port 22
 
 If any check fails, fix before moving to Phase 8.
+
+---
+
+## 📍 Next session entry point
+
+**Status as of 2026-05-07:** Bug A (digest audio) and Bug B (connect --list false positive) done. Commits `e4564a8` and `7ef534f` on `origin/main`.
+
+**Start here next time:** Bug C — Connector token refresh (line ~35 of this file).
+
+**Quick context for Bug C:**
+- The workaround `scripts/refresh_google_tokens.sh` had to run manually multiple times during this session to keep Google OAuth alive. Bug C eliminates that.
+- The fix lives in the connector base class (or shared OAuth helpers in `src/openjarvis/connectors/oauth.py`) — refresh-on-401 with atomic JSON write-back.
+- Also rotate fresh Cartesia key (`CARTESIA_API_KEY`) is in `~/.zshrc`; the old one was deleted at play.cartesia.ai after accidental chat exposure.
+
+**Also worth knowing:**
+- All 6 Google OAuth connectors were re-authed in this session; refresh tokens valid until next 7-day rotation (Google OAuth app is still in "Testing" mode — root cause; production-mode publish is a separate todo).
+- The Bug A lesson applies broadly: when fixing Bug C, test both fresh-auth and 401-during-use code paths.
