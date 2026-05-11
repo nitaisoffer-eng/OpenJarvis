@@ -26,9 +26,9 @@ Fix the three known bugs before any new work. These cause friction every day; fi
   - [x] Verify: `jarvis digest --fresh` plays through and audio file exists in cache after exit
   - [x] Update `tasks/lessons.md` with root cause
 
-- [ ] **Bug B: `connect --list` reports "connected" with token-less connector files**
-  - [ ] Reproduce by removing tokens from a connector JSON
-  - [ ] Add token-presence validation to `ConnectorRegistry.list_connectors()` or equivalent
+- [x] **Bug B: `connect --list` reports "connected" with token-less connector files**
+  - [x] Reproduce by removing tokens from a connector JSON
+  - [x] Add token-presence validation (surgical: gmail.py only, matches gdrive/gcalendar pattern) to `ConnectorRegistry.list_connectors()` or equivalent
   - [ ] Status should reflect `connected | needs_auth | broken`, not just bool
   - [ ] Verify: `connect --list` shows accurate state for each connector
 

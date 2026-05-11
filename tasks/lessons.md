@@ -39,3 +39,46 @@ Two surgical edits to `digest_cmd.py`:
 2. Added `audio_thread.join()` after `console.print(Markdown(text))` in the
    playback block, so the CLI waits for audio to finish before exiting.
 
+## Drift between sibling files in the same codebase
+
+**Date:** 2026-05-07
+**Context:** Bug B — `connect --list` false positive (`src/openjarvis/connectors/gmail.py`)
+
+### What happened
+`gmail.py`'s `is_connected()` returned `True` for any non-empty token dict,
+including dicts that only contained `client_id`/`client_secret` with no
+actual access token. Meanwhile, `gdrive.py` and `gcalendar.py` — sibling
+files implementing the same OAuth pattern — already had the correct check:
+`bool(tokens.get("access_token") or tokens.get("token"))`.
+
+The bug was in gmail.py alone, with the comment in-source even admitting
+it: *"simplified: real impl would also check expiry / refresh token"*.
+
+### Lesson
+**Before writing a fix, scan the siblings.** When N files implement the
+same pattern, one of them is often already correct. Diff the broken file
+against the working ones before designing a new fix — copy the working
+pattern instead of inventing.
+
+### Why this scope and not bigger
+The todo entry described an ideal "three-state status: `connected | needs_auth
+| broken`" — that would touch the registry, CLI display, and 24 other
+connectors. The actual symptom (false positive on token-less files) is
+fixed with two lines in one file by matching the sibling pattern. The
+bigger refactor is a separate concern; capture it as a future todo if it
+matters operationally, not because the docstring aspires to it.
+
+### Patch
+One method body in `gmail.py`. Match the existing `gdrive.py`/`gcalendar.py`
+implementation verbatim:
+```python
+return bool(tokens.get("access_token") or tokens.get("token"))
+```
+
+### Bonus catch
+This bug originally surfaced during Bug A debugging, when `--list` reported
+all six Google connectors as `connected` even though every refresh token
+was 7-day-expired. The fix here doesn't catch expired tokens (that's a
+separate bug — connector-layer token refresh on 401, still in the todo
+backlog). But it does catch the "deleted access_token, refresh_token
+present" case, which is the common false-positive shape.

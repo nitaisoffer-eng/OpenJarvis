@@ -199,13 +199,12 @@ class GmailConnector(BaseConnector):
     # ------------------------------------------------------------------
 
     def is_connected(self) -> bool:
-        """Return ``True`` if a credentials file with a valid token exists."""
+        """Return ``True`` if a credentials file with a valid access token exists."""
         tokens = load_tokens(self._credentials_path)
         if tokens is None:
             return False
-        # Accept any non-empty dict that contains at least one key
-        # (simplified: real impl would also check expiry / refresh token)
-        return bool(tokens)
+        # Must have an actual access_token, not just a client_id
+        return bool(tokens.get("access_token") or tokens.get("token"))
 
     def disconnect(self) -> None:
         """Delete the stored credentials file."""
