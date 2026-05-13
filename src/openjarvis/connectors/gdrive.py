@@ -18,6 +18,7 @@ from openjarvis.connectors.oauth import (
     build_google_auth_url,
     delete_tokens,
     load_tokens,
+    refresh_access_token,
     resolve_google_credentials,
     run_oauth_flow,
     save_tokens,
@@ -47,24 +48,19 @@ _EXPORT_MIME_MAP: Dict[str, str] = {
 
 
 def _gdrive_api_list_files(
-    token: str,
+    credentials_path: str,
     *,
     page_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Call the Drive ``files.list`` endpoint.
+    """Call the Drive ``files.list`` endpoint with auto-refresh on 401.
 
     Parameters
     ----------
-    token:
-        OAuth access token.
+    credentials_path:
+        Path to the connector JSON. Tokens are loaded here; on 401 we
+        refresh in-place and retry once.
     page_token:
         Pagination token from a previous response's ``nextPageToken``.
-
-    Returns
-    -------
-    dict
-        Raw API response containing ``files`` list and optional
-        ``nextPageToken``.
     """
     _fields = "nextPageToken,files(id,name,mimeType,modifiedTime,owners,webViewLink)"
     params: Dict[str, Any] = {
@@ -75,39 +71,57 @@ def _gdrive_api_list_files(
     if page_token:
         params["pageToken"] = page_token
 
+    tokens = load_tokens(credentials_path) or {}
+    token = tokens.get("access_token") or tokens.get("token", "")
     resp = httpx.get(
         f"{_GDRIVE_API_BASE}/files",
         headers={"Authorization": f"Bearer {token}"},
         params=params,
         timeout=30.0,
     )
+    if resp.status_code == 401:
+        tokens = refresh_access_token(credentials_path)
+        token = tokens["access_token"]
+        resp = httpx.get(
+            f"{_GDRIVE_API_BASE}/files",
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+            timeout=30.0,
+        )
     resp.raise_for_status()
     return resp.json()
 
 
-def _gdrive_api_export(token: str, file_id: str, mime_type: str) -> str:
-    """Export a Google Workspace file as plain text or CSV.
+def _gdrive_api_export(credentials_path: str, file_id: str, mime_type: str) -> str:
+    """Export a Google Workspace file with auto-refresh on 401.
 
     Parameters
     ----------
-    token:
-        OAuth access token.
+    credentials_path:
+        Path to the connector JSON. Tokens are loaded here; on 401 we
+        refresh in-place and retry once.
     file_id:
         The Drive file ID to export.
     mime_type:
         The target MIME type for the export (e.g. ``"text/plain"``).
-
-    Returns
-    -------
-    str
-        Exported file content as a string.
     """
+    tokens = load_tokens(credentials_path) or {}
+    token = tokens.get("access_token") or tokens.get("token", "")
     resp = httpx.get(
         f"{_GDRIVE_API_BASE}/files/{file_id}/export",
         headers={"Authorization": f"Bearer {token}"},
         params={"mimeType": mime_type},
         timeout=60.0,
     )
+    if resp.status_code == 401:
+        tokens = refresh_access_token(credentials_path)
+        token = tokens["access_token"]
+        resp = httpx.get(
+            f"{_GDRIVE_API_BASE}/files/{file_id}/export",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"mimeType": mime_type},
+            timeout=60.0,
+        )
     resp.raise_for_status()
     return resp.text
 
@@ -234,16 +248,14 @@ class GDriveConnector(BaseConnector):
         tokens = load_tokens(self._credentials_path)
         if not tokens:
             return
-
-        token: str = tokens.get("access_token", tokens.get("token", ""))
-        if not token:
+        if not (tokens.get("access_token") or tokens.get("token")):
             return
 
         page_token: Optional[str] = cursor
         synced = 0
 
         while True:
-            list_resp = _gdrive_api_list_files(token, page_token=page_token)
+            list_resp = _gdrive_api_list_files(self._credentials_path, page_token=page_token)
             files: List[Dict[str, Any]] = list_resp.get("files", [])
 
             for file_meta in files:
@@ -263,7 +275,7 @@ class GDriveConnector(BaseConnector):
                 export_mime = _EXPORT_MIME_MAP.get(mime_type)
                 if export_mime is not None:
                     try:
-                        content = _gdrive_api_export(token, file_id, export_mime)
+                        content = _gdrive_api_export(self._credentials_path, file_id, export_mime)
                     except Exception:  # noqa: BLE001
                         content = f"[File: {name}] ({mime_type})"
                 else:

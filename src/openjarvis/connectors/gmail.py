@@ -20,6 +20,7 @@ from openjarvis.connectors.oauth import (
     build_google_auth_url,
     delete_tokens,
     load_tokens,
+    refresh_access_token,
     resolve_google_credentials,
     save_tokens,
 )
@@ -41,27 +42,22 @@ _DEFAULT_CREDENTIALS_PATH = str(DEFAULT_CONFIG_DIR / "connectors" / "gmail.json"
 
 
 def _gmail_api_list_messages(
-    token: str,
+    credentials_path: str,
     *,
     page_token: Optional[str] = None,
     query: str = "",
 ) -> Dict[str, Any]:
-    """Call the Gmail ``messages.list`` endpoint.
+    """Call the Gmail ``messages.list`` endpoint with auto-refresh on 401.
 
     Parameters
     ----------
-    token:
-        OAuth access token.
+    credentials_path:
+        Path to the connector JSON. Tokens are loaded here; on 401 we
+        refresh in-place and retry once.
     page_token:
         Pagination token from a previous response's ``nextPageToken``.
     query:
         Gmail search query string (e.g. ``"is:unread"``).
-
-    Returns
-    -------
-    dict
-        Raw API response containing ``messages`` list and optional
-        ``nextPageToken``.
     """
     params: Dict[str, str] = {}
     if page_token:
@@ -69,37 +65,55 @@ def _gmail_api_list_messages(
     if query:
         params["q"] = query
 
+    tokens = load_tokens(credentials_path) or {}
+    token = tokens.get("access_token") or tokens.get("token", "")
     resp = httpx.get(
         f"{_GMAIL_API_BASE}/messages",
         headers={"Authorization": f"Bearer {token}"},
         params=params,
         timeout=30.0,
     )
+    if resp.status_code == 401:
+        tokens = refresh_access_token(credentials_path)
+        token = tokens["access_token"]
+        resp = httpx.get(
+            f"{_GMAIL_API_BASE}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+            timeout=30.0,
+        )
     resp.raise_for_status()
     return resp.json()
 
 
-def _gmail_api_get_message(token: str, msg_id: str) -> Dict[str, Any]:
-    """Fetch a single Gmail message by ID (``full`` format).
+def _gmail_api_get_message(credentials_path: str, msg_id: str) -> Dict[str, Any]:
+    """Fetch a single Gmail message by ID with auto-refresh on 401.
 
     Parameters
     ----------
-    token:
-        OAuth access token.
+    credentials_path:
+        Path to the connector JSON. Tokens are loaded here; on 401 we
+        refresh in-place and retry once.
     msg_id:
         Gmail message ID string.
-
-    Returns
-    -------
-    dict
-        Raw API response for the message resource.
     """
+    tokens = load_tokens(credentials_path) or {}
+    token = tokens.get("access_token") or tokens.get("token", "")
     resp = httpx.get(
         f"{_GMAIL_API_BASE}/messages/{msg_id}",
         headers={"Authorization": f"Bearer {token}"},
         params={"format": "full"},
         timeout=30.0,
     )
+    if resp.status_code == 401:
+        tokens = refresh_access_token(credentials_path)
+        token = tokens["access_token"]
+        resp = httpx.get(
+            f"{_GMAIL_API_BASE}/messages/{msg_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"format": "full"},
+            timeout=30.0,
+        )
     resp.raise_for_status()
     return resp.json()
 
@@ -247,9 +261,7 @@ class GmailConnector(BaseConnector):
         tokens = load_tokens(self._credentials_path)
         if not tokens:
             return
-
-        token: str = tokens.get("token", tokens.get("access_token", ""))
-        if not token:
+        if not (tokens.get("access_token") or tokens.get("token")):
             return
 
         query = "category:primary"
@@ -263,7 +275,7 @@ class GmailConnector(BaseConnector):
 
         while True:
             list_resp = _gmail_api_list_messages(
-                token, page_token=page_token, query=query
+                self._credentials_path, page_token=page_token, query=query
             )
             messages: List[Dict[str, Any]] = list_resp.get("messages", [])
 
@@ -272,7 +284,7 @@ class GmailConnector(BaseConnector):
                 if not msg_id:
                     continue
 
-                msg = _gmail_api_get_message(token, msg_id)
+                msg = _gmail_api_get_message(self._credentials_path, msg_id)
                 payload: Dict[str, Any] = msg.get("payload", {})
                 headers: List[Dict[str, str]] = payload.get("headers", [])
 

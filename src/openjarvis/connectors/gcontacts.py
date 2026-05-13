@@ -18,6 +18,7 @@ from openjarvis.connectors.oauth import (
     build_google_auth_url,
     delete_tokens,
     load_tokens,
+    refresh_access_token,
     resolve_google_credentials,
     run_oauth_flow,
     save_tokens,
@@ -40,24 +41,19 @@ _DEFAULT_CREDENTIALS_PATH = str(DEFAULT_CONFIG_DIR / "connectors" / "gcontacts.j
 
 
 def _gcontacts_api_list(
-    token: str,
+    credentials_path: str,
     *,
     page_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Call the People API ``people/me/connections`` endpoint.
+    """Call the People API ``people/me/connections`` with auto-refresh on 401.
 
     Parameters
     ----------
-    token:
-        OAuth access token.
+    credentials_path:
+        Path to the connector JSON. Tokens are loaded here; on 401 we
+        refresh in-place and retry once.
     page_token:
         Pagination token from a previous response's ``nextPageToken``.
-
-    Returns
-    -------
-    dict
-        Raw API response containing a ``connections`` list and optional
-        ``nextPageToken``.
     """
     params: Dict[str, Any] = {
         "personFields": "names,emailAddresses,phoneNumbers,organizations",
@@ -66,12 +62,23 @@ def _gcontacts_api_list(
     if page_token:
         params["pageToken"] = page_token
 
+    tokens = load_tokens(credentials_path) or {}
+    token = tokens.get("access_token") or tokens.get("token", "")
     resp = httpx.get(
         f"{_GCONTACTS_API_BASE}/people/me/connections",
         headers={"Authorization": f"Bearer {token}"},
         params=params,
         timeout=30.0,
     )
+    if resp.status_code == 401:
+        tokens = refresh_access_token(credentials_path)
+        token = tokens["access_token"]
+        resp = httpx.get(
+            f"{_GCONTACTS_API_BASE}/people/me/connections",
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+            timeout=30.0,
+        )
     resp.raise_for_status()
     return resp.json()
 
@@ -249,16 +256,14 @@ class GContactsConnector(BaseConnector):
         tokens = load_tokens(self._credentials_path)
         if not tokens:
             return
-
-        token: str = tokens.get("access_token", tokens.get("token", ""))
-        if not token:
+        if not (tokens.get("access_token") or tokens.get("token")):
             return
 
         page_token: Optional[str] = cursor
         synced = 0
 
         while True:
-            list_resp = _gcontacts_api_list(token, page_token=page_token)
+            list_resp = _gcontacts_api_list(self._credentials_path, page_token=page_token)
             connections: List[Dict[str, Any]] = list_resp.get("connections", [])
 
             for person in connections:

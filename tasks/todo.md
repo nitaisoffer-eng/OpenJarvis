@@ -32,12 +32,18 @@ Fix the three known bugs before any new work. These cause friction every day; fi
   - [ ] Status should reflect `connected | needs_auth | broken`, not just bool
   - [ ] Verify: `connect --list` shows accurate state for each connector
 
-- [ ] **Bug C: Connector token refresh not implemented**
-  - [ ] Find connector base class
-  - [ ] Add automatic refresh-on-401 using stored `refresh_token`
-  - [ ] On refresh: update connector JSON with new tokens atomically
-  - [ ] Verify: let an access token expire, run `jarvis digest`, confirm auto-refresh happens
-  - [ ] Delete the manual `refresh_google_tokens.sh` workaround
+- [x] **Bug C: Connector token refresh not implemented**
+  - [x] Find connector base class
+  - [x] Add automatic refresh-on-401 using stored `refresh_token`
+  - [x] On refresh: update connector JSON with new tokens atomically
+  - [x] Verify: let an access token expire, run `jarvis digest`, confirm auto-refresh happens
+  - [x] Delete the manual `refresh_google_tokens.sh` workaround
+
+- [ ] **Bug D: `jarvis digest` reports "No digest for today" after local-day rolls over UTC midnight**
+  - [ ] Reproduce: confirm `digest_store.get_today()` builds a UTC date pattern (`datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%d")`) but compares it against `generated_at` timestamps stored in naive local time
+  - [ ] Decide fix: (a) pass system local TZ to `get_today()` from `digest_cmd.py`, or (b) store timestamps in UTC at write time, or (c) both
+  - [ ] Verify: at 17:00 PT (00:00 UTC the next day), `jarvis digest` returns today's digest, not "No digest for today"
+  - [ ] Audit other date-based queries in `digest_store.py` (history, get_by_date) for the same bug
 
 - [ ] **Side fix: Tilde expansion in `file_read`** (low effort, ship it while we're here)
   - [ ] Add `os.path.expanduser` to `tools/file_read.py` allowed_dirs and path inputs

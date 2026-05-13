@@ -18,6 +18,7 @@ from openjarvis.connectors.oauth import (
     build_google_auth_url,
     delete_tokens,
     load_tokens,
+    refresh_access_token,
     resolve_google_credentials,
     run_oauth_flow,
     save_tokens,
@@ -39,41 +40,48 @@ _DEFAULT_CREDENTIALS_PATH = str(DEFAULT_CONFIG_DIR / "connectors" / "gcalendar.j
 # ---------------------------------------------------------------------------
 
 
-def _gcal_api_calendars_list(token: str) -> Dict[str, Any]:
-    """Call the Calendar ``calendarList.list`` endpoint.
+def _gcal_api_calendars_list(credentials_path: str) -> Dict[str, Any]:
+    """Call the Calendar ``calendarList.list`` endpoint with auto-refresh on 401.
 
     Parameters
     ----------
-    token:
-        OAuth access token.
-
-    Returns
-    -------
-    dict
-        Raw API response containing an ``items`` list of calendar resources.
+    credentials_path:
+        Path to the connector JSON. Tokens are loaded here; on 401 we
+        refresh in-place and retry once.
     """
+    tokens = load_tokens(credentials_path) or {}
+    token = tokens.get("access_token") or tokens.get("token", "")
     resp = httpx.get(
         f"{_GCAL_API_BASE}/users/me/calendarList",
         headers={"Authorization": f"Bearer {token}"},
         timeout=30.0,
     )
+    if resp.status_code == 401:
+        tokens = refresh_access_token(credentials_path)
+        token = tokens["access_token"]
+        resp = httpx.get(
+            f"{_GCAL_API_BASE}/users/me/calendarList",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30.0,
+        )
     resp.raise_for_status()
     return resp.json()
 
 
 def _gcal_api_events_list(
-    token: str,
+    credentials_path: str,
     calendar_id: str,
     *,
     page_token: Optional[str] = None,
     time_min: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Call the Calendar ``events.list`` endpoint for a single calendar.
+    """Call the Calendar ``events.list`` endpoint with auto-refresh on 401.
 
     Parameters
     ----------
-    token:
-        OAuth access token.
+    credentials_path:
+        Path to the connector JSON. Tokens are loaded here; on 401 we
+        refresh in-place and retry once.
     calendar_id:
         Calendar identifier (e.g. ``"primary"``).
     page_token:
@@ -81,12 +89,6 @@ def _gcal_api_events_list(
     time_min:
         Lower bound (exclusive) for an event's end time (RFC3339 timestamp).
         When omitted the API returns all events.
-
-    Returns
-    -------
-    dict
-        Raw API response containing an ``items`` list and optional
-        ``nextPageToken``.
     """
     params: Dict[str, Any] = {
         "singleEvents": "true",
@@ -98,12 +100,23 @@ def _gcal_api_events_list(
     if time_min:
         params["timeMin"] = time_min
 
+    tokens = load_tokens(credentials_path) or {}
+    token = tokens.get("access_token") or tokens.get("token", "")
     resp = httpx.get(
         f"{_GCAL_API_BASE}/calendars/{calendar_id}/events",
         headers={"Authorization": f"Bearer {token}"},
         params=params,
         timeout=30.0,
     )
+    if resp.status_code == 401:
+        tokens = refresh_access_token(credentials_path)
+        token = tokens["access_token"]
+        resp = httpx.get(
+            f"{_GCAL_API_BASE}/calendars/{calendar_id}/events",
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+            timeout=30.0,
+        )
     resp.raise_for_status()
     return resp.json()
 
@@ -302,13 +315,11 @@ class GCalendarConnector(BaseConnector):
         tokens = load_tokens(self._credentials_path)
         if not tokens:
             return
-
-        token: str = tokens.get("access_token", tokens.get("token", ""))
-        if not token:
+        if not (tokens.get("access_token") or tokens.get("token")):
             return
 
         # Fetch list of calendars
-        calendars_resp = _gcal_api_calendars_list(token)
+        calendars_resp = _gcal_api_calendars_list(self._credentials_path)
         calendars: List[Dict[str, Any]] = calendars_resp.get("items", [])
 
         # Default to 24 hours ago so we don't dump the entire calendar history
@@ -328,7 +339,7 @@ class GCalendarConnector(BaseConnector):
             while True:
                 try:
                     events_resp = _gcal_api_events_list(
-                        token,
+                        self._credentials_path,
                         calendar_id,
                         page_token=page_token,
                         time_min=time_min,

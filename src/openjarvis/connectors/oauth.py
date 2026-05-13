@@ -586,6 +586,99 @@ def _exchange_token(
     return resp.json()
 
 
+
+def refresh_access_token(credentials_path: str) -> Dict[str, Any]:
+    """Refresh an expired Google access token using the stored refresh_token.
+
+    Reads the connector credentials file at *credentials_path*, POSTs to
+    Google's token endpoint with grant_type=refresh_token, and writes the
+    updated payload back atomically (temp file + rename). If
+    *credentials_path* is or shadows the shared Google credentials file,
+    the new tokens are fanned out to every sibling connector file so they
+    stay in sync.
+
+    Raises ``ValueError`` if the file lacks the required fields, and
+    ``httpx.HTTPStatusError`` if Google rejects the refresh (e.g. the
+    refresh_token has been revoked or expired \u2014 7-day rotation for OAuth
+    apps still in "Testing" mode).
+
+    Returns the updated token dict.
+    """
+    import time
+    import httpx
+
+    tokens = load_tokens(credentials_path)
+    if tokens is None:
+        raise ValueError(
+            f"No credentials file at {credentials_path}; cannot refresh."
+        )
+    for required in ("refresh_token", "client_id", "client_secret"):
+        if not tokens.get(required):
+            raise ValueError(
+                f"Cannot refresh: credentials at {credentials_path} are missing "
+                f"\u2018{required}\u2019. Re-run \u2018jarvis connect\u2019."
+            )
+
+    resp = httpx.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "client_id": tokens["client_id"],
+            "client_secret": tokens["client_secret"],
+            "refresh_token": tokens["refresh_token"],
+            "grant_type": "refresh_token",
+        },
+        timeout=30.0,
+    )
+    resp.raise_for_status()
+    new = resp.json()
+
+    # Google omits refresh_token from refresh responses (it doesn't rotate);
+    # carry the existing one forward so we can refresh again next time.
+    payload = {
+        "access_token": new.get("access_token", ""),
+        "refresh_token": new.get("refresh_token", tokens["refresh_token"]),
+        "token_type": new.get("token_type", tokens.get("token_type", "Bearer")),
+        "expires_in": new.get("expires_in", 3600),
+        "expires_at": int(time.time()) + int(new.get("expires_in", 3600)),
+        "client_id": tokens["client_id"],
+        "client_secret": tokens["client_secret"],
+    }
+
+    # Atomic write: temp file in the same dir, fsync, rename. POSIX rename
+    # is atomic within a filesystem, so readers never see a half-written file.
+    import json
+    import os
+    from pathlib import Path as _P
+    target = _P(credentials_path)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    with open(tmp, "rb") as f:
+        os.fsync(f.fileno())
+    os.replace(tmp, target)
+
+    # Fan out to sibling Google connector files so they stay in sync.
+    # We do this whenever the refreshed file is one of the Google set, so
+    # that refreshing gmail.json also updates gcalendar.json, etc.
+    google_siblings = (
+        "google.json", "gmail.json", "gcalendar.json",
+        "gcontacts.json", "gdrive.json", "google_tasks.json",
+    )
+    if target.name in google_siblings:
+        for name in google_siblings:
+            sibling = target.parent / name
+            if sibling == target or not sibling.exists():
+                continue
+            sib_tmp = sibling.with_suffix(sibling.suffix + ".tmp")
+            sib_tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            os.chmod(sib_tmp, 0o600)
+            with open(sib_tmp, "rb") as f:
+                os.fsync(f.fileno())
+            os.replace(sib_tmp, sibling)
+
+    return payload
+
+
 def run_connector_oauth(
     connector_id: str,
     client_id: str = "",
