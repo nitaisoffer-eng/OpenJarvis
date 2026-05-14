@@ -252,17 +252,23 @@ If any check fails, fix before moving to Phase 8.
 
 ---
 
-## 📍 Next session entry point
+## 📍 Next session entry point (updated 2026-05-12)
 
-**Status as of 2026-05-07:** Bug A (digest audio) and Bug B (connect --list false positive) done. Commits `e4564a8` and `7ef534f` on `origin/main`.
+**Status:** Bugs A, B, C done. Commits `e4564a8`, `7ef534f`, `421e135`, `c60bc7b` on `origin/main`.
 
-**Start here next time:** Bug C — Connector token refresh (line ~35 of this file).
+**Start here next time:** Bug D — `digest_store.get_today()` timezone mismatch (line ~42 of this file).
 
-**Quick context for Bug C:**
-- The workaround `scripts/refresh_google_tokens.sh` had to run manually multiple times during this session to keep Google OAuth alive. Bug C eliminates that.
-- The fix lives in the connector base class (or shared OAuth helpers in `src/openjarvis/connectors/oauth.py`) — refresh-on-401 with atomic JSON write-back.
-- Also rotate fresh Cartesia key (`CARTESIA_API_KEY`) is in `~/.zshrc`; the old one was deleted at play.cartesia.ai after accidental chat exposure.
+**Quick context for Bug D (diagnosis already done):**
+- `digest_store.get_today()` defaults to `timezone_name="UTC"`, builds today's date pattern via `datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%d")` → e.g. `"2026-05-13"`.
+- But `generated_at` is stored as naive local time (e.g. `"2026-05-12T17:01:53"` when generated at 5pm PT).
+- After ~5pm PT, local date != UTC date, so the LIKE pattern misses and `get_today()` returns None → CLI prints "No digest for today" even when one exists.
+- Surfaced during Bug C verification; the digest itself works fine.
 
-**Also worth knowing:**
-- All 6 Google OAuth connectors were re-authed in this session; refresh tokens valid until next 7-day rotation (Google OAuth app is still in "Testing" mode — root cause; production-mode publish is a separate todo).
-- The Bug A lesson applies broadly: when fixing Bug C, test both fresh-auth and 401-during-use code paths.
+**Likely fix:** `digest_cmd.py` passes a system local TZ to `get_today()` instead of relying on the `"UTC"` default. Or store timestamps in UTC at write time. Or both. Probably 5-10 lines total.
+
+**Also still open after Bug D:**
+- Side fix: tilde expansion in `file_read` tool
+- Bug B's deferred sub-items: three-state status enum + audit of 22 other `is_connected()` implementations
+- `is_connected()` in `google_tasks.py` still uses file-only check (same shape as Bug B's gmail fix, deliberately left for later)
+
+**Then Phase 7.0 verification checkpoint → droplet provisioning (Phase 7.1).**
