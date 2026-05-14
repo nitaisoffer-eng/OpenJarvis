@@ -169,3 +169,53 @@ declaring done.
   (same shape as the Bug B we fixed in gmail.py). Left untouched to keep
   the Bug C commit clean.
 
+
+## Mandatory dependencies are single points of failure
+
+**Date:** 2026-05-14
+**Context:** `http_request` tool blocked by missing `openjarvis_rust` extension (`src/openjarvis/security/ssrf.py`)
+
+### What happened
+The `http_request` tool was effectively dead: every call raised
+`ModuleNotFoundError: No module named 'openjarvis_rust'` before any HTTP
+work began. The SSRF check delegated to a Rust extension that isn't on
+PyPI and requires a Rust toolchain + maturin to build from source. Until
+fixed, the entire `http_request` tool was unreachable by agents.
+
+Discovered while debugging why `jask` couldn't scrape brokerage pages
+during a research task — the agent reported "HTTP requests failed due to
+a local module issue" but kept going on search snippets, which masked
+the severity.
+
+### The fix
+Two lines in `check_ssrf()`: wrap the Rust call in
+`try/except ImportError`, fall back to `_check_ssrf_python()` which was
+already present in the same file with a comment "kept for reference only."
+The Python fallback enforces identical rules (blocked hostnames + private
+CIDRs + DNS resolution check) — Rust gives speed, not different semantics.
+
+Deliberately did NOT touch `_rust_bridge.py`. Its docstring says "Rust is
+mandatory — there is no Python fallback" and that contract holds for the
+other Rust-backed paths in the codebase. Only the SSRF call gets graceful
+fallback. Surgical, not philosophical.
+
+### Lesson
+**A "mandatory dependency" without a fallback is a single point of failure
+disguised as a design decision.** If `openjarvis_rust` isn't installable
+from PyPI and requires a custom toolchain to build, marking it
+"mandatory" turns every Rust-backed code path into a foot-gun on fresh
+installs. The right architectural move would be: optional Rust everywhere,
+Python equivalents kept as fallbacks. Out of scope for this fix, but worth
+noting as a directional issue.
+
+### Adjacent findings (not bugs in our code, but flagged for the brokers task)
+- The tool's User-Agent is `python-httpx/0.28.1` by default. WAFs
+  (Imperva, Cloudflare bot detection) reject this on sight. Coldwell
+  Banker returned a 200 OK with rejection HTML. Need to add a
+  browser-like UA before `http_request` is useful for scraping enterprise
+  sites.
+- Major brokerage sites all run WAFs. Scraping them needs more than a
+  fixed UA — likely Playwright/headless browser. This is exactly the
+  use case Auto Browser was designed for. Confirms the action-layer
+  roadmap, doesn't change it.
+
